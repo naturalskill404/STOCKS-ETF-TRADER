@@ -1,220 +1,488 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
-*$py.class
+import customtkinter as ctk
+from tkinter import messagebox, ttk
+import json, os, threading, time
+from datetime import datetime
 
-# C extensions
-*.so
+# Official Alpaca Trading & Data SDK Imports
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("green")
 
-# PyInstaller
-#   Usually these files are written by a python script from a template
-#   before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+class MariaGrandoareAlpaca(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("MARIA GRANDOARE V29.5 - STABLE STOCKS & ETF TRADER")
+        self.geometry("1200x700")
+        self.configure(fg_color="#000000")
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+        self.running = False
+        self.aggressive_mode = False
+        self.selected_symbols = []
+        self.last_scanned_data = [] 
+        
+        # SORTING MEMORY: Keeps track of active column and order (descending by default)
+        self.active_sort_col = "PNL" 
+        self.active_sort_reverse = True 
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-*.lcov
-.hypothesis/
-.pytest_cache/
-cover/
+        # PLETHORA OF OVER 200 TOP STOCKS AND ETFS
+        self.all_symbols = sorted(list(set([
+            # TECH & SEMICONDUCTORS
+            "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "AMD", "INTC", "MU", 
+            "AVGO", "QCOM", "TXN", "AMAT", "LRCX", "ADI", "NFLX", "DIS", "PYPL", "SQ", 
+            "ASML", "TSM", "ARM", "SMCI", "PLTR", "PANW", "CRWD", "SNOW", "DDOG", "ZS",
+            "NET", "PATH", "U", "RBLX", "SHOP", "SE", "MELI", "UBER", "ABNB", "DASH",
+            "DELL", "HPE", "ORCL", "IBM", "CSCO", "ACN", "NOW", "CRM", "ADBE", "INTU",
 
-# Translations
-*.mo
-*.pot
+            # FINANCE & BANKING
+            "JPM", "BAC", "WFC", "C", "GS", "MS", "V", "MA", "AXP", "COIN",
+            "BLK", "SCHW", "BNP", "UBS", "PNC", "TROW", "HOOD", "SOFI", "AFRM", "UPST",
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+            # ENERGY & RESOURCES
+            "XOM", "CVX", "COP", "SLB", "PFE", "OXY", "HAL", "EOG", "MPC", "PSX",
+            "VLO", "KMI", "WMB", "BP", "SHEL", "TTE", "VALE", "RIO", "BHP", "FCX",
 
-# Flask stuff:
-instance/
-.webassets-cache
+            # HEALTHCARE & PHARMA
+            "JNJ", "MRK", "ABBV", "LLY", "UNH", "PFE", "BMY", "AMGN", "GILD", "VRTX",
+            "REGN", "ISRG", "MDT", "SYK", "BSX", "EW", "ZTS", "MODV", "DXCM", "ALGN",
 
-# Scrapy stuff:
-.scrapy
+            # RETAIL & CONSUMER
+            "WMT", "COST", "TGT", "HD", "LOW", "NKE", "SBUX", "MCD", "CMG", "KO",
+            "PEP", "PG", "CL", "KMB", "EL", "LULU", "CROX", "DECK", "TJX", "ROST",
 
-# Sphinx documentation
-docs/_build/
+            # AUTOMOTIVE & INDUSTRIAL
+            "F", "GM", "RIVN", "LCID", "CAT", "DE", "BA", "LMT", "NOC", "GD",
+            "GE", "HON", "MMM", "EMR", "EATN", "PARK", "UPS", "FDX", "UNP", "CSX",
 
-# PyBuilder
-.pybuilder/
-target/
+            # TOP ETFS & LEVERAGED
+            "SPY", "QQQ", "IWM", "DIA", "ARKK", "SOXL", "SOXS", "TQQQ", "SQQQ", "UVXY",
+            "GLD", "SLV", "USO", "UNG", "XLF", "XLE", "XLK", "XLV", "XLY", "XLP",
+            "XLI", "XLU", "XLB", "XLRE", "SMH", "XBI", "LABU", "LABD", "TNA", "TZA"
+        ])))
+        
+        self.setup_ui()
+        self.load_settings()
+        
+        threading.Thread(target=self.init_alpaca_client, daemon=True).start()
 
-# Jupyter Notebook
-.ipynb_checkpoints
+    def setup_ui(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Treeview", background="#0d0d0d", foreground="#00FF41", fieldbackground="#0d0d0d", rowheight=28)
+        style.configure("Treeview.Heading", background="#1a1a1a", foreground="#00FF41", font=("Arial", 10, "bold"))
 
-# IPython
-profile_default/
-ipython_config.py
+        self.tabs = ctk.CTkTabview(self, fg_color="#000000", segmented_button_selected_color="#00FF41")
+        self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.t_mon = self.tabs.add("📊 PORTFOLIO MONITOR & SCANNER")
+        self.t_his = self.tabs.add("📜 TRADE HISTORY")
+        self.t_set = self.tabs.add("⚙️ SETTINGS")
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+        # --- MONITOR TOP ---
+        top_frame = ctk.CTkFrame(self.t_mon, fg_color="#000000")
+        top_frame.pack(fill="x", pady=2)
+        
+        self.l_bal = ctk.CTkLabel(top_frame, text="💵 Cash: -- USD | 📊 Portfolio Value: -- USD", font=("Arial", 16, "bold"), text_color="#00FF41")
+        self.l_bal.pack(side="left", padx=15)
+        
+        self.l_timer = ctk.CTkLabel(top_frame, text="⏱ Status: Standby", font=("Arial", 12), text_color="#aaaaaa")
+        self.l_timer.pack(side="left", padx=15)
+        
+        ctk.CTkLabel(top_frame, text="(Click header = Sort | Double-click = MANUAL SELL)", text_color="#666666", font=("Arial", 11)).pack(side="right", padx=15)
+        
+        mid_frame = ctk.CTkFrame(self.t_mon, fg_color="#000000")
+        mid_frame.pack(fill="x", pady=2, padx=15)
+        
+        self.sw_mode = ctk.CTkSwitch(mid_frame, text="CALM MODE", command=self.update_mode_ui)
+        self.sw_mode.pack(side="left", padx=5)
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-# Pipfile.lock
+        ctk.CTkLabel(mid_frame, text="🔍 Filter Symbol:", text_color="#00FF41").pack(side="left", padx=(20, 5))
+        self.e_filter_mon = ctk.CTkEntry(mid_frame, placeholder_text="e.g. AAPL, UNG...", width=140)
+        self.e_filter_mon.pack(side="left", padx=5)
+        self.e_filter_mon.bind("<KeyRelease>", self.filter_monitor_tree)
 
-# uv
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-# uv.lock
+        # Monitor Treeview Table
+        self.tree = ttk.Treeview(self.t_mon, columns=("M", "P", "RSI", "S", "PNL", "V"), show='headings', height=9)
+        
+        column_headers = {
+            "M": "SYMBOL",
+            "P": "PRICE ($)",
+            "RSI": "RSI",
+            "S": "STATUS",
+            "PNL": "PROFIT / LOSS (%)",
+            "V": "POSITION VALUE ($)"
+        }
+        
+        for c, h in column_headers.items():
+            self.tree.heading(c, text=h, command=lambda col=c: self.on_header_click(col))
+            self.tree.column(c, anchor="center", width=140)
+            
+        self.tree.pack(fill="both", expand=True, padx=15, pady=2)
+        self.tree.bind("<Double-1>", self.on_manual_sell)
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-# poetry.lock
-# poetry.toml
+        self.log_box = ctk.CTkTextbox(self.t_mon, height=75, fg_color="#080808", text_color="#00FF41", font=("Consolas", 11))
+        self.log_box.pack(fill="x", padx=15, pady=2)
+        
+        self.btn_run = ctk.CTkButton(self.t_mon, text="▶ START BOT", fg_color="#008F11", height=40, font=("Arial", 16, "bold"), command=self.toggle_bot)
+        self.btn_run.pack(pady=5)
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-# pdm.lock
-# pdm.toml
-.pdm-python
-.pdm-build/
+        # --- TRADE HISTORY ---
+        self.tree_his = ttk.Treeview(self.t_his, columns=("D", "M", "T", "P", "Q"), show='headings')
+        for c, h in zip(("D", "M", "T", "P", "Q"), ("DATE/TIME", "SYMBOL", "TYPE", "ORDER TYPE", "QUANTITY / VALUE")):
+            self.tree_his.heading(c, text=h); self.tree_his.column(c, anchor="center")
+        self.tree_his.pack(fill="both", expand=True, padx=20, pady=20)
 
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-# pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi/*
-!.pixi/config.toml
+        # --- SETTINGS ---
+        settings_frame = ctk.CTkScrollableFrame(self.t_set, fg_color="#000000")
+        settings_frame.pack(fill="both", expand=True)
+        
+        self.e_endpoint = ctk.CTkEntry(settings_frame, placeholder_text="Alpaca API Endpoint", width=400)
+        self.e_endpoint.pack(pady=5)
+        self.e_endpoint.insert(0, "https://paper-api.alpaca.markets")
+        
+        self.e_key = ctk.CTkEntry(settings_frame, placeholder_text="Alpaca API Key ID", width=400)
+        self.e_key.pack(pady=5)
+        
+        self.e_sec = ctk.CTkEntry(settings_frame, placeholder_text="Alpaca Secret Key", width=400, show="*")
+        self.e_sec.pack(pady=5)
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+        self.e_slots = self.add_setting(settings_frame, "Max Slots:", 0)
+        self.e_miza = self.add_setting(settings_frame, "Stake (USD):", 1)
+        self.e_tp = self.add_setting(settings_frame, "Take Profit %:", 2)
+        self.e_rsi_buy = self.add_setting(settings_frame, "RSI Buy Threshold:", 3)
+        self.e_refresh = self.add_setting(settings_frame, "Refresh Rate (sec):", 4)
+        
+        ctk.CTkButton(settings_frame, text="💾 SAVE SETTINGS", fg_color="#008F11", command=self.save_and_sync).pack(pady=10)
 
-# Celery stuff
-celerybeat-schedule*
-celerybeat.pid
+        search_frame = ctk.CTkFrame(settings_frame, fg_color="#1a1a1a")
+        search_frame.pack(fill="x", padx=20, pady=10)
+        
+        self.e_search = ctk.CTkEntry(search_frame, placeholder_text="🔍 Search / Add Symbol...", width=200)
+        self.e_search.pack(side="left", padx=10, pady=5)
+        self.e_search.bind("<KeyRelease>", self.filter_symbols)
+        
+        ctk.CTkButton(search_frame, text="➕ ADD SYMBOL", command=self.add_custom_symbol).pack(side="left", padx=5)
+        
+        btns_frame = ctk.CTkFrame(search_frame, fg_color="transparent")
+        btns_frame.pack(side="right", padx=10)
+        ctk.CTkButton(btns_frame, text="⭐ TOP TECH & SEMI", command=self.select_top_tech).pack(side="left", padx=5)
+        ctk.CTkButton(btns_frame, text="🌟 SELECT ALL (200+)", fg_color="#333333", command=self.select_all).pack(side="left", padx=5)
+        ctk.CTkButton(btns_frame, text="🧹 DESELECT ALL", fg_color="#551111", command=self.deselect_all).pack(side="left", padx=5)
 
-# Redis
-*.rdb
-*.aof
-*.pid
+        self.lbox = ttk.Treeview(settings_frame, columns=("S", "M"), show="headings", height=12)
+        self.lbox.heading("M", text="AVAILABLE SYMBOLS LIST (Click to toggle active selection)")
+        self.lbox.pack(fill="both", padx=20, pady=5)
+        self.lbox.bind("<ButtonRelease-1>", self.on_item_click)
 
-# RabbitMQ
-mnesia/
-rabbitmq/
-rabbitmq-data/
+    def add_setting(self, master, txt, row):
+        f = ctk.CTkFrame(master, fg_color="transparent")
+        f.pack(pady=2, fill="x")
+        ctk.CTkLabel(f, text=txt, width=150).pack(side="left", padx=50)
+        e = ctk.CTkEntry(f, width=100)
+        e.pack(side="left")
+        return e
 
-# ActiveMQ
-activemq-data/
+    def add_log(self, msg):
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.log_box.insert("end", f"[{ts}] {msg}\n")
+        self.log_box.see("end")
 
-# SageMath parsed files
-*.sage.py
+    def init_alpaca_client(self):
+        self.after(0, self.update_lbox)
 
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+    def get_clients(self):
+        k = self.e_key.get().strip()
+        s = self.e_sec.get().strip()
+        endpoint = self.e_endpoint.get().strip().rstrip('/')
+        if endpoint.endswith('/v2'): endpoint = endpoint[:-3]
+        
+        trading_client = TradingClient(k, s, paper=True, url_override=endpoint if endpoint else None)
+        data_client = StockHistoricalDataClient(k, s)
+        return trading_client, data_client
 
-# Spyder project settings
-.spyderproject
-.spyproject
+    def fetch_bars_with_retry(self, data_client, request_params, symbol, max_retries=3):
+        """Robust network connection handler (Protects against ConnectionResetError)"""
+        for attempt in range(max_retries):
+            try:
+                return data_client.get_stock_bars(request_params)
+            except Exception as ex:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                else:
+                    raise ex
 
-# Rope project settings
-.ropeproject
+    def sync_all(self, trading_client, data_client):
+        try:
+            if not data_client: _, data_client = self.get_clients()
+            if not self.selected_symbols:
+                self.after(0, lambda: self.l_timer.configure(text="⚠️ No symbols selected!"))
+                return
 
-# mkdocs/Zensical documentation
-/site
+            account = trading_client.get_account()
+            cash = float(account.cash)
+            portfolio_val = float(account.portfolio_value)
+            self.l_bal.configure(text=f"💵 Free Cash: {cash:.2f} USD | 📊 Total Portfolio: {portfolio_val:.2f} USD")
+            
+            max_s = int(self.e_slots.get() or 0)
+            miza = float(self.e_miza.get() or 0)
+            tp_perc = float(self.e_tp.get() or 1.5)
+            rsi_b = float(self.e_rsi_buy.get() or 30)
+            
+            rows = []
+            active_p = 0
+            positions = {p.symbol: p for p in trading_client.get_all_positions()}
+            
+            for s in self.selected_symbols:
+                if s in positions: active_p += 1
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+            for s in self.selected_symbols:
+                try:
+                    request_params = StockBarsRequest(
+                        symbol_or_symbols=s, 
+                        timeframe=TimeFrame.Minute, 
+                        limit=25
+                    )
+                    # Safe network call with auto-retry
+                    bars = self.fetch_bars_with_retry(data_client, request_params, s)
+                    df = bars.df
+                    if df.empty: continue
+                    
+                    if hasattr(df.index, 'levels'):
+                        if s not in df.index.get_level_values(0): continue
+                        df_sym = df.loc[s]
+                    else:
+                        df_sym = df
 
-# Pyre type checker
-.pyre/
+                    closes = df_sym['close'].tolist()
+                    if not closes: continue
+                    
+                    p_cur = closes[-1]
+                    diffs = [closes[i]-closes[i-1] for i in range(1, len(closes))]
+                    g = sum([d for d in diffs if d>0])/14 if len(diffs)>=14 else 1
+                    l = sum([abs(d) for d in diffs if d<0])/14 if len(diffs)>=14 else 1
+                    rsi = round(100 - (100/(1+(g/l))), 2) if l != 0 else 100
 
-# pytype static type analyzer
-.pytype/
+                    if s in positions:
+                        pos = positions[s]
+                        val = float(pos.market_value)
+                        pnl = float(pos.unrealized_plpc) * 100
+                        status = "💎 HOLD"
+                        
+                        if pnl >= tp_perc and self.aggressive_mode and self.running:
+                            self.execute_trade(trading_client, s, float(pos.qty), "SELL", is_qty=True)
+                            status = "🚀 SELLING"
+                        
+                        rows.append((s, f"{p_cur:.4f}", rsi, status, f"{pnl:+.2f}%", f"{val:.2f}"))
+                    else:
+                        status = "👀 WATCHING"
+                        if self.running and self.aggressive_mode and rsi <= rsi_b and active_p < max_s:
+                            if cash >= miza:
+                                self.execute_trade(trading_client, s, miza, "BUY", is_qty=False)
+                                active_p += 1
+                                status = "🎯 BUYING"
+                        rows.append((s, f"{p_cur:.4f}", rsi, status, "---", "0.00"))
+                except Exception as ex:
+                    print(f"Error processing symbol {s}: {ex}")
 
-# Cython debug symbols
-cython_debug/
+            self.last_scanned_data = rows
+            self.after(0, lambda: self.refresh_tree(rows))
+            self.after(0, lambda: self.l_timer.configure(text=f"🔄 Last Sync: {datetime.now().strftime('%H:%M:%S')}"))
+        except Exception as e: 
+            self.add_log(f"❗ Sync Error: {str(e)}")
 
-# PyCharm
-#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#   and can be added to the global gitignore or merged into this file.  For a more nuclear
-#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
+    def execute_trade(self, trading_client, symbol, amount_or_qty, side, is_qty=False):
+        try:
+            if side == "BUY":
+                market_order_data = MarketOrderRequest(
+                    symbol=symbol, notional=amount_or_qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY
+                )
+            else:
+                market_order_data = MarketOrderRequest(
+                    symbol=symbol, qty=amount_or_qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY
+                )
+            trading_client.submit_order(order_data=market_order_data)
+            self.add_log(f"✅ {side} {symbol} executed successfully!")
+            self.tree_his.insert("", 0, values=(datetime.now().strftime("%H:%M:%S"), symbol, side, "Market", amount_or_qty))
+        except Exception as e: 
+            self.add_log(f"❌ Order Error {side} [{symbol}]: {str(e)}")
 
-# Abstra
-#   Abstra is an AI-powered process automation framework.
-#   Ignore directories containing user credentials, local state, and settings.
-#   Learn more at https://abstra.io/docs
-.abstra/
+    def toggle_bot(self):
+        self.running = not self.running
+        self.btn_run.configure(text="🛑 STOP BOT" if self.running else "▶ START BOT", fg_color="red" if self.running else "#008F11")
+        if self.running: 
+            self.add_log("🚀 Bot Started!")
+            threading.Thread(target=self.bot_loop, daemon=True).start()
 
-# Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore that
-#   can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, you
-#   could uncomment the following to ignore the entire vscode folder
-# .vscode/
-# Temporary file for partial code execution
-tempCodeRunnerFile.py
+    def bot_loop(self):
+        try:
+            tc, dc = self.get_clients()
+            while self.running:
+                self.sync_all(tc, dc)
+                try:
+                    sleep_time = float(self.e_refresh.get() or 2.0)
+                except:
+                    sleep_time = 2.0
+                
+                for remaining in range(int(sleep_time), 0, -1):
+                    if not self.running: 
+                        break
+                    self.after(0, lambda r=remaining: self.l_timer.configure(text=f"⏳ Next re-sync in {r}s..."))
+                    time.sleep(1)
+        except Exception as e:
+            self.add_log(f"❌ Session Error: {e}")
+            self.running = False
+            self.btn_run.configure(text="▶ START BOT", fg_color="#008F11")
 
-# Ruff stuff:
-.ruff_cache/
+    def on_header_click(self, col):
+        if self.active_sort_col == col:
+            self.active_sort_reverse = not self.active_sort_reverse
+        else:
+            self.active_sort_col = col
+            self.active_sort_reverse = True 
 
-# PyPI configuration file
-.pypirc
+        if hasattr(self, 'last_scanned_data') and self.last_scanned_data:
+            self.refresh_tree(self.last_scanned_data)
 
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
+    def refresh_tree(self, data):
+        selected_items = self.tree.selection()
+        selected_symbols_ui = [self.tree.item(item, "values")[0] for item in selected_items if self.tree.exists(item)]
 
-# Streamlit
-.streamlit/secrets.toml
+        filter_text = self.e_filter_mon.get().strip().upper() if hasattr(self, 'e_filter_mon') else ""
+        filtered_data = [r for r in data if not filter_text or filter_text in r[0]]
+
+        col_to_index = {"M": 0, "P": 1, "RSI": 2, "S": 3, "PNL": 4, "V": 5}
+        idx = col_to_index.get(self.active_sort_col, 4)
+
+        def parse_value(row):
+            val = row[idx]
+            if val is None: return (-999999, "")
+            val_str = str(val).replace('%', '').replace('+', '').replace('$', '').strip()
+            if val_str in ("", "---"): return (-999999, val_str)
+            try:
+                return (float(val_str), "")
+            except ValueError:
+                return (-999999, val_str)
+
+        filtered_data.sort(key=parse_value, reverse=self.active_sort_reverse)
+
+        for i in self.tree.get_children(): 
+            self.tree.delete(i)
+
+        for r in filtered_data:
+            item_id = self.tree.insert("", "end", values=r)
+            if r[0] in selected_symbols_ui:
+                self.tree.selection_add(item_id)
+
+    def filter_monitor_tree(self, event=None):
+        if hasattr(self, 'last_scanned_data') and self.last_scanned_data:
+            self.refresh_tree(self.last_scanned_data)
+
+    def filter_symbols(self, e=None):
+        q = self.e_search.get().upper()
+        self.filtered_symbols = [s for s in self.all_symbols if q in s]
+        self.update_lbox()
+
+    def add_custom_symbol(self):
+        sym = self.e_search.get().strip().upper()
+        if sym:
+            if sym not in self.all_symbols:
+                self.all_symbols.append(sym)
+                self.all_symbols.sort()
+            if sym not in self.selected_symbols:
+                self.selected_symbols.append(sym)
+            self.update_lbox()
+            messagebox.showinfo("OK", f"Symbol {sym} added successfully!")
+
+    def update_lbox(self):
+        for i in self.lbox.get_children(): self.lbox.delete(i)
+        src = getattr(self, 'filtered_symbols', self.all_symbols)
+        for s in src: self.lbox.insert("", "end", values=("✅" if s in self.selected_symbols else "⬜", s))
+
+    def on_item_click(self, e):
+        r = self.lbox.identify_row(e.y)
+        if r:
+            s = self.lbox.item(r)['values'][1]
+            if s in self.selected_symbols: self.selected_symbols.remove(s)
+            else: self.selected_symbols.append(s)
+            self.update_lbox()
+
+    def select_top_tech(self):
+        self.selected_symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "AMD", "MU", "SPY", "QQQ"]
+        self.update_lbox()
+
+    def select_all(self):
+        self.selected_symbols = list(self.all_symbols)
+        self.update_lbox()
+
+    def deselect_all(self):
+        self.selected_symbols = []
+        self.update_lbox()
+
+    def on_manual_sell(self, event):
+        item_id = self.tree.selection()
+        if not item_id: return
+        vals = self.tree.item(item_id[0], "values")
+        symbol = vals[0]
+        try:
+            val = float(vals[5])
+        except:
+            val = 0.0
+            
+        if val > 0.5:
+            if messagebox.askyesno("CONFIRM MANUAL SELL", f"Are you sure you want to manually sell {symbol} worth ${val:.2f}?"):
+                threading.Thread(target=self.execute_manual_sell, args=(symbol,), daemon=True).start()
+        else:
+            self.add_log(f"ℹ️ {symbol} has no open position to sell.")
+
+    def execute_manual_sell(self, symbol):
+        try:
+            tc, _ = self.get_clients()
+            position = tc.get_open_position(symbol)
+            qty = float(position.qty)
+            
+            market_order_data = MarketOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY
+            )
+            tc.submit_order(order_data=market_order_data)
+            self.add_log(f"⚡ MANUALLY SOLD: {symbol} (Qty: {qty})")
+            self.sync_all(tc, None)
+        except Exception as e: 
+            self.add_log(f"❌ Manual Sell Error [{symbol}]: {str(e)}")
+
+    def save_and_sync(self):
+        d = {
+            "endpoint": self.e_endpoint.get(), "key": self.e_key.get(), "sec": self.e_sec.get(),
+            "miza": self.e_miza.get(), "slots": self.e_slots.get(), "tp": self.e_tp.get(),
+            "rsi_buy": self.e_rsi_buy.get(), "refresh": self.e_refresh.get(), "sel": self.selected_symbols
+        }
+        with open("config_maria_alpaca.json", "w") as f: json.dump(d, f)
+        messagebox.showinfo("OK", "Settings saved successfully!")
+
+    def load_settings(self):
+        if os.path.exists("config_maria_alpaca.json"):
+            with open("config_maria_alpaca.json", "r") as f:
+                d = json.load(f)
+                self.e_endpoint.delete(0, 'end'); self.e_endpoint.insert(0, d.get("endpoint", "https://paper-api.alpaca.markets"))
+                self.e_key.insert(0, d.get("key", ""))
+                self.e_sec.insert(0, d.get("sec", ""))
+                self.e_miza.insert(0, d.get("miza", "100"))
+                self.e_slots.insert(0, d.get("slots", "3"))
+                self.e_tp.delete(0, 'end'); self.e_tp.insert(0, d.get("tp", "2.0"))
+                self.e_rsi_buy.delete(0, 'end'); self.e_rsi_buy.insert(0, d.get("rsi_buy", "30"))
+                self.e_refresh.delete(0, 'end'); self.e_refresh.insert(0, d.get("refresh", "2"))
+                self.selected_symbols = d.get("sel", [])
+
+    def update_mode_ui(self):
+        self.aggressive_mode = self.sw_mode.get()
+        self.sw_mode.configure(text="AGGRESSIVE MODE" if self.aggressive_mode else "CALM MODE")
+
+if __name__ == "__main__":
+    MariaGrandoareAlpaca().mainloop()
